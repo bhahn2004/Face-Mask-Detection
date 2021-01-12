@@ -15,8 +15,9 @@ from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 from tensorflow.keras.preprocessing.image import img_to_array
 from tensorflow.keras.preprocessing.image import load_img
 from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.callbacks import ModelCheckpoint
 from sklearn.preprocessing import LabelBinarizer
-from sklearn.model_selection import train_test_split
+#from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 from imutils import paths
 import matplotlib.pyplot as plt
@@ -26,8 +27,10 @@ import os
 
 # construct the argument parser and parse the arguments
 ap = argparse.ArgumentParser()
-ap.add_argument("-d", "--dataset", required=True,
-	help="path to input dataset")
+ap.add_argument("-t", "--train_set", required=True,
+	help="path to train dataset")
+ap.add_argument("-v", "--val_set", required=True,
+	help="path to validation dataset")
 ap.add_argument("-p", "--plot", type=str, default="plot.png",
 	help="path to output loss/accuracy plot")
 ap.add_argument("-m", "--model", type=str,
@@ -38,43 +41,46 @@ args = vars(ap.parse_args())
 # initialize the initial learning rate, number of epochs to train for,
 # and batch size
 INIT_LR = 1e-4
-EPOCHS = 20
+EPOCHS = 100
 BS = 32
+
+os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
+
+def load_imgs(path):
+	print("[INFO] loading images...")
+	imagePaths = list(paths.list_images(path))
+	data = []
+	labels = []
+	
+	# loop over the image paths
+	for imagePath in imagePaths:
+		# extract the class label from the filename
+		label = imagePath.split(os.path.sep)[-2]
+	
+		# load the input image (224x224) and preprocess it
+		image = load_img(imagePath, target_size=(224, 224))
+		image = img_to_array(image)
+		image = preprocess_input(image)
+	
+		# update the data and labels lists, respectively
+		data.append(image)
+		labels.append(label)
+		
+	# convert the data and labels to NumPy arrays
+	data = np.array(data, dtype="float32")
+	labels = np.array(labels)
+	
+	# perform one-hot encoding on the labels
+	lb = LabelBinarizer()
+	labels = lb.fit_transform(labels)
+	labels = to_categorical(labels)
+		
+	return data, labels
 
 # grab the list of images in our dataset directory, then initialize
 # the list of data (i.e., images) and class images
-print("[INFO] loading images...")
-imagePaths = list(paths.list_images(args["dataset"]))
-data = []
-labels = []
-
-# loop over the image paths
-for imagePath in imagePaths:
-	# extract the class label from the filename
-	label = imagePath.split(os.path.sep)[-2]
-
-	# load the input image (224x224) and preprocess it
-	image = load_img(imagePath, target_size=(224, 224))
-	image = img_to_array(image)
-	image = preprocess_input(image)
-
-	# update the data and labels lists, respectively
-	data.append(image)
-	labels.append(label)
-
-# convert the data and labels to NumPy arrays
-data = np.array(data, dtype="float32")
-labels = np.array(labels)
-
-# perform one-hot encoding on the labels
-lb = LabelBinarizer()
-labels = lb.fit_transform(labels)
-labels = to_categorical(labels)
-
-# partition the data into training and testing splits using 75% of
-# the data for training and the remaining 25% for testing
-(trainX, testX, trainY, testY) = train_test_split(data, labels,
-	test_size=0.20, stratify=labels, random_state=42)
+print("[INFO] loading train images...")
+trainX, trainY = load_imgs(args['train_set'])
 
 # construct the training image generator for data augmentation
 aug = ImageDataGenerator(
@@ -115,14 +121,23 @@ opt = Adam(lr=INIT_LR, decay=INIT_LR / EPOCHS)
 model.compile(loss="binary_crossentropy", optimizer=opt,
 	metrics=["accuracy"])
 
+# checkpointing
+checkpoint_callback = ModelCheckpoint('./checkpoint/checkpoint_{epoch:04d}/')
+
 # train the head of the network
 print("[INFO] training head...")
 H = model.fit(
 	aug.flow(trainX, trainY, batch_size=BS),
 	steps_per_epoch=len(trainX) // BS,
-	validation_data=(testX, testY),
-	validation_steps=len(testX) // BS,
-	epochs=EPOCHS)
+	#validation_data=(testX, testY),
+	#validation_steps=len(testX) // BS,
+	epochs=EPOCHS,
+    callbacks=[checkpoint_callback])
+
+del trainX, trainY
+
+print("[INFO] loading val images...")
+testX, testY = load_imgs(args['val_set'])
 
 # make predictions on the testing set
 print("[INFO] evaluating network...")
